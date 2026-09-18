@@ -35,16 +35,10 @@ alter table public.manual_allocation_rules enable row level security;
 alter table public.manual_allocation_rule_students enable row level security;
 
 -- These rules are managed through the authenticated Express API using the
--- service-role key. RLS remains restrictive for direct client access.
-create policy "manual_rules_select_super_admin"
-on public.manual_allocation_rules
-for select to authenticated
-using (public.current_role_name() = 'super_admin');
+-- service-role key. The browser must never query these tables directly.
+revoke all on table public.manual_allocation_rules from anon, authenticated;
+revoke all on table public.manual_allocation_rule_students from anon, authenticated;
 
-create policy "manual_rule_students_select_super_admin"
-on public.manual_allocation_rule_students
-for select to authenticated
-using (public.current_role_name() = 'super_admin');
-
--- Only the backend service role performs writes. No direct client write policy
--- is intentionally provided.
+-- No direct client policies are intentionally provided. The server's
+-- requireRole('super_admin') gate is the application authorization boundary,
+-- while RLS prevents accidental direct client access.
