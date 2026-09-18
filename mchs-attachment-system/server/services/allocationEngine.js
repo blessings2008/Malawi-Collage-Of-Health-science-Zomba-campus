@@ -98,6 +98,29 @@ function runAllocation(students, districts, options = {}) {
   const results = [];
   let duplicatesPrevented = 0;
 
+  // Pre-calculate forced group sizes. A group is treated atomically so a
+  // capacity shortage cannot split students who were explicitly required to
+  // stay together.
+  const forcedGroupSizes = new Map();
+  for (const student of orderedStudents) {
+    const forcedDistrictId = manualAssignments.get(student.id);
+    if (forcedDistrictId) {
+      forcedGroupSizes.set(
+        forcedDistrictId,
+        (forcedGroupSizes.get(forcedDistrictId) || 0) + 1
+      );
+    }
+  }
+
+  const blockedForcedDistricts = new Set(
+    [...forcedGroupSizes.entries()]
+      .filter(([districtId, size]) => {
+        const district = districtState.get(districtId);
+        return !district || district.remaining < size;
+      })
+      .map(([districtId]) => districtId)
+  );
+
   for (const student of orderedStudents) {
     const visited = new Set(student.visitedDistrictIds || []);
     const forcedDistrictId = manualAssignments.get(student.id);
@@ -107,13 +130,13 @@ function runAllocation(students, districts, options = {}) {
     // student is left unallocated instead of silently exceeding capacity.
     if (forcedDistrictId) {
       const forced = districtState.get(forcedDistrictId);
-      if (!forced || forced.remaining <= 0) {
+      if (!forced || blockedForcedDistricts.has(forcedDistrictId)) {
         results.push({
           studentId: student.id,
           districtId: null,
           rotationStatus: null,
           rotationReason: forced
-            ? `Manual allocation rule could not be applied: ${forced.name} has no remaining capacity.`
+            ? `Manual allocation rule could not be applied to the group: ${forced.name} does not have enough remaining capacity for all selected students.`
             : 'Manual allocation rule references an unavailable district.',
         });
         continue;
