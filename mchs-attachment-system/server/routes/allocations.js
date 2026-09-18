@@ -237,176 +237,6 @@ router.post('/commit', requireRole('admin', 'super_admin'), async (req, res) => 
   res.json({ committed: data.length, unallocated: unallocated.length });
 });
 
-// GET /api/allocations/:periodId — view current allocation table for a period
-router.get('/:periodId', async (req, res) => {
-  const { data, error } = await supabaseAdmin
-    .from('allocations')
-    .select('*, students(student_number, full_name, gender, year_of_study, cohort_id), districts(name)')
-    .eq('attachment_period_id', req.params.periodId);
-
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
-});
-
-// PUT /api/allocations/:id/adjust — manual reassignment (admin+), with audit trail
-// Body: { newDistrictId, confirmed: bool }
-router.put('/:id/adjust', requireRole('admin', 'super_admin'), async (req, res) => {
-  const { newDistrictId, confirmed } = req.body;
-
-  const { data: existing, error: fetchError } = await supabaseAdmin
-    .from('allocations')
-    .select('*, students(student_number, full_name), districts(name), attachment_periods(is_locked, name)')
-    .eq('id', req.params.id)
-    .single();
-
-  if (fetchError) return res.status(404).json({ error: 'Allocation not found.' });
-  if (existing.attachment_periods?.is_locked) {
-    return res.status(423).json({ error: 'This allocation is finalized and locked.' });
-  }
-
-  // Check if the student previously visited the target district — surface the warning
-  const { data: pastVisits } = await supabaseAdmin
-    .from('allocations')
-    .select('district_id, attachment_periods(name)')
-    .eq('student_id', existing.student_id)
-    .eq('district_id', newDistrictId)
-    .in('status', ['Allocated', 'Locked']);
-
-  if (pastVisits?.length > 0 && !confirmed) {
-    return res.status(409).json({
-      requiresConfirmation: true,
-      warning: `This student was previously allocated to this district during: ${pastVisits
-        .map((v) => v.attachment_periods?.name)
-        .join(', ')}`,
-    });
-  }
-
-  const { data: newDistrict } = await supabaseAdmin
-    .from('districts')
-    .select('name')
-    .eq('id', newDistrictId)
-    .single();
-
-  const { data: updated, error } = await supabaseAdmin
-    .from('allocations')
-    .update({
-      district_id: newDistrictId,
-      status: 'Allocated',
-      is_manual_override: true,
-      rotation_status: pastVisits?.length > 0 ? 'Repeat Allocation' : 'New District',
-    })
-    .eq('id', req.params.id)
-    .select()
-    .single();
-
-  if (error) return res.status(400).json({ error: error.message });
-
-  const actionText = `moved student ${existing.students.student_number} from ${
-    existing.districts?.name || 'Unallocated'
-  } to ${newDistrict?.name}`;
-
-  await logAction({
-    user: req.user,
-    action: actionText,
-    entityType: 'allocation',
-    entityId: updated.id,
-    changes: { from: existing.district_id, to: newDistrictId },
-  });
-
-  await notify({
-    type: 'manual_change',
-    title: 'Manual Allocation Change',
-    message: actionText,
-    relatedEntityType: 'allocation',
-    relatedEntityId: updated.id,
-  });
-
-  res.json(updated);
-});
-
-// POST /api/allocations/:periodId/finalize — lock the period (admin+)
-router.post('/:periodId/finalize', requireRole('admin', 'super_admin'), async (req, res) => {
-  const { data: allocations, error } = await supabaseAdmin
-    .from('allocations')
-    .select('id, status, district_id')
-    .eq('attachment_period_id', req.params.periodId);
-
-  if (error) return res.status(500).json({ error: error.message });
-
-  const unallocated = allocations.filter((a) => a.status === 'Unallocated');
-  if (unallocated.length > 0) {
-    return res.status(422).json({
-      error: 'Cannot finalize: unresolved unallocated students remain.',
-      unallocatedCount: unallocated.length,
-    });
-  }
-
-  const { error: updateError } = await supabaseAdmin
-    .from('allocations')
-    .update({
-      status: 'Locked',
-      finalized: true,
-      finalized_at: new Date().toISOString(),
-      finalized_by: req.user.id,
-    })
-    .eq('attachment_period_id', req.params.periodId);
-
-  if (updateError) return res.status(400).json({ error: updateError.message });
-
-  const { data: period, error: periodError } = await supabaseAdmin
-    .from('attachment_periods')
-    .update({ is_locked: true, locked_at: new Date().toISOString(), locked_by: req.user.id, status: 'Current' })
-    .eq('id', req.params.periodId)
-    .select()
-    .single();
-
-  if (periodError) return res.status(400).json({ error: periodError.message });
-
-  await logAction({
-    user: req.user,
-    action: `finalized allocation for "${period.name}"`,
-    entityType: 'period',
-    entityId: period.id,
-  });
-
-  await notify({
-    type: 'allocation_finalized',
-    title: 'Allocation Finalized Successfully',
-    message: `The allocation for "${period.name}" has been locked.`,
-    relatedEntityType: 'period',
-    relatedEntityId: period.id,
-  });
-
-  res.json({ finalized: true, period });
-});
-
-// POST /api/allocations/:periodId/unlock — super_admin only
-router.post('/:periodId/unlock', requireRole('super_admin'), async (req, res) => {
-  const { data: period, error } = await supabaseAdmin
-    .from('attachment_periods')
-    .update({ is_locked: false })
-    .eq('id', req.params.periodId)
-    .select()
-    .single();
-
-  if (error) return res.status(400).json({ error: error.message });
-
-  await supabaseAdmin
-    .from('allocations')
-    .update({ status: 'Allocated' })
-    .eq('attachment_period_id', req.params.periodId)
-    .eq('status', 'Locked');
-
-  await logAction({
-    user: req.user,
-    action: `unlocked allocation for "${period.name}"`,
-    entityType: 'period',
-    entityId: period.id,
-  });
-
-  res.json({ unlocked: true, period });
-});
-
 // GET /api/allocations/manual-rules — Super Admin only
 router.get('/manual-rules', requireRole('super_admin'), async (req, res) => {
   const { data, error } = await supabaseAdmin
@@ -617,6 +447,177 @@ router.delete('/manual-rules/:id', requireRole('super_admin'), async (req, res) 
   });
 
   res.json({ deleted: true });
+});
+
+
+// GET /api/allocations/:periodId — view current allocation table for a period
+router.get('/:periodId', async (req, res) => {
+  const { data, error } = await supabaseAdmin
+    .from('allocations')
+    .select('*, students(student_number, full_name, gender, year_of_study, cohort_id), districts(name)')
+    .eq('attachment_period_id', req.params.periodId);
+
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+// PUT /api/allocations/:id/adjust — manual reassignment (admin+), with audit trail
+// Body: { newDistrictId, confirmed: bool }
+router.put('/:id/adjust', requireRole('admin', 'super_admin'), async (req, res) => {
+  const { newDistrictId, confirmed } = req.body;
+
+  const { data: existing, error: fetchError } = await supabaseAdmin
+    .from('allocations')
+    .select('*, students(student_number, full_name), districts(name), attachment_periods(is_locked, name)')
+    .eq('id', req.params.id)
+    .single();
+
+  if (fetchError) return res.status(404).json({ error: 'Allocation not found.' });
+  if (existing.attachment_periods?.is_locked) {
+    return res.status(423).json({ error: 'This allocation is finalized and locked.' });
+  }
+
+  // Check if the student previously visited the target district — surface the warning
+  const { data: pastVisits } = await supabaseAdmin
+    .from('allocations')
+    .select('district_id, attachment_periods(name)')
+    .eq('student_id', existing.student_id)
+    .eq('district_id', newDistrictId)
+    .in('status', ['Allocated', 'Locked']);
+
+  if (pastVisits?.length > 0 && !confirmed) {
+    return res.status(409).json({
+      requiresConfirmation: true,
+      warning: `This student was previously allocated to this district during: ${pastVisits
+        .map((v) => v.attachment_periods?.name)
+        .join(', ')}`,
+    });
+  }
+
+  const { data: newDistrict } = await supabaseAdmin
+    .from('districts')
+    .select('name')
+    .eq('id', newDistrictId)
+    .single();
+
+  const { data: updated, error } = await supabaseAdmin
+    .from('allocations')
+    .update({
+      district_id: newDistrictId,
+      status: 'Allocated',
+      is_manual_override: true,
+      rotation_status: pastVisits?.length > 0 ? 'Repeat Allocation' : 'New District',
+    })
+    .eq('id', req.params.id)
+    .select()
+    .single();
+
+  if (error) return res.status(400).json({ error: error.message });
+
+  const actionText = `moved student ${existing.students.student_number} from ${
+    existing.districts?.name || 'Unallocated'
+  } to ${newDistrict?.name}`;
+
+  await logAction({
+    user: req.user,
+    action: actionText,
+    entityType: 'allocation',
+    entityId: updated.id,
+    changes: { from: existing.district_id, to: newDistrictId },
+  });
+
+  await notify({
+    type: 'manual_change',
+    title: 'Manual Allocation Change',
+    message: actionText,
+    relatedEntityType: 'allocation',
+    relatedEntityId: updated.id,
+  });
+
+  res.json(updated);
+});
+
+// POST /api/allocations/:periodId/finalize — lock the period (admin+)
+router.post('/:periodId/finalize', requireRole('admin', 'super_admin'), async (req, res) => {
+  const { data: allocations, error } = await supabaseAdmin
+    .from('allocations')
+    .select('id, status, district_id')
+    .eq('attachment_period_id', req.params.periodId);
+
+  if (error) return res.status(500).json({ error: error.message });
+
+  const unallocated = allocations.filter((a) => a.status === 'Unallocated');
+  if (unallocated.length > 0) {
+    return res.status(422).json({
+      error: 'Cannot finalize: unresolved unallocated students remain.',
+      unallocatedCount: unallocated.length,
+    });
+  }
+
+  const { error: updateError } = await supabaseAdmin
+    .from('allocations')
+    .update({
+      status: 'Locked',
+      finalized: true,
+      finalized_at: new Date().toISOString(),
+      finalized_by: req.user.id,
+    })
+    .eq('attachment_period_id', req.params.periodId);
+
+  if (updateError) return res.status(400).json({ error: updateError.message });
+
+  const { data: period, error: periodError } = await supabaseAdmin
+    .from('attachment_periods')
+    .update({ is_locked: true, locked_at: new Date().toISOString(), locked_by: req.user.id, status: 'Current' })
+    .eq('id', req.params.periodId)
+    .select()
+    .single();
+
+  if (periodError) return res.status(400).json({ error: periodError.message });
+
+  await logAction({
+    user: req.user,
+    action: `finalized allocation for "${period.name}"`,
+    entityType: 'period',
+    entityId: period.id,
+  });
+
+  await notify({
+    type: 'allocation_finalized',
+    title: 'Allocation Finalized Successfully',
+    message: `The allocation for "${period.name}" has been locked.`,
+    relatedEntityType: 'period',
+    relatedEntityId: period.id,
+  });
+
+  res.json({ finalized: true, period });
+});
+
+// POST /api/allocations/:periodId/unlock — super_admin only
+router.post('/:periodId/unlock', requireRole('super_admin'), async (req, res) => {
+  const { data: period, error } = await supabaseAdmin
+    .from('attachment_periods')
+    .update({ is_locked: false })
+    .eq('id', req.params.periodId)
+    .select()
+    .single();
+
+  if (error) return res.status(400).json({ error: error.message });
+
+  await supabaseAdmin
+    .from('allocations')
+    .update({ status: 'Allocated' })
+    .eq('attachment_period_id', req.params.periodId)
+    .eq('status', 'Locked');
+
+  await logAction({
+    user: req.user,
+    action: `unlocked allocation for "${period.name}"`,
+    entityType: 'period',
+    entityId: period.id,
+  });
+
+  res.json({ unlocked: true, period });
 });
 
 // POST /api/allocations/manual — directly assign or reassign a single student
