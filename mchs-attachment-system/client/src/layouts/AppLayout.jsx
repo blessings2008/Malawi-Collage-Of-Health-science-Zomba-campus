@@ -13,6 +13,7 @@ const NAV_ITEMS = [
   { to: '/reports', label: 'Reports', icon: '▦', roles: ['super_admin', 'admin', 'lecturer'] },
   { to: '/audit-log', label: 'Audit Log', icon: '≡', roles: ['super_admin', 'admin'] },
   { to: '/users', label: 'User Management', icon: '◎', roles: ['super_admin'] },
+  { to: '/manual-allocation-rules', label: 'Manual Allocation Rules', icon: '⚑', roles: ['super_admin'] },
 ];
 
 export default function AppLayout({ children }) {
