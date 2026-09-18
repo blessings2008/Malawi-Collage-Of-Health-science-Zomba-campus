@@ -114,12 +114,13 @@ router.post('/run', requireRole('admin', 'super_admin'), async (req, res) => {
     .in('id', allocationDistrictIds)
     .eq('is_active', true);
 
-  if (manualDistrictIds.length && districts.length < allocationDistrictIds.length) {
+  if (districtsError) return res.status(500).json({ error: districtsError.message });
+
+  if (manualDistrictIds.length && (districts || []).length < allocationDistrictIds.length) {
     return res.status(409).json({
       error: 'One or more manual allocation rules target an inactive or unavailable district.',
     });
   }
-  if (districtsError) return res.status(500).json({ error: districtsError.message });
 
   // Account for anything already allocated in this district for this period
   const { data: existingAllocs } = await supabaseAdmin
