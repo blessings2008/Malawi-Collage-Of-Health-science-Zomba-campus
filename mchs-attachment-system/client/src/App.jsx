@@ -14,6 +14,7 @@ import AllocationEnginePage from './pages/AllocationEnginePage';
 import ReportsPage from './pages/ReportsPage';
 import AuditLogPage from './pages/AuditLogPage';
 import UsersPage from './pages/UsersPage';
+import ManualAllocationRulesPage from './pages/ManualAllocationRulesPage';
 
 function ProtectedRoute({ children, roles }) {
   const { session, profile, loading } = useAuth();
@@ -75,6 +76,14 @@ export default function App() {
         }
       />
 
+      <Route
+        path="/manual-allocation-rules"
+        element={
+          <ProtectedRoute roles={['super_admin']}>
+            <ManualAllocationRulesPage />
+          </ProtectedRoute>
+        }
+      />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
