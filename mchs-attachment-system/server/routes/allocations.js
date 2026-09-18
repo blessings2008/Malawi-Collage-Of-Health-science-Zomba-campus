@@ -378,6 +378,16 @@ router.put('/manual-rules/:id', requireRole('super_admin'), async (req, res) => 
     if (!district?.is_active) return res.status(400).json({ error: 'Selected district is not active.' });
 
     if (nextStudentIds) {
+      const { data: validStudents, error: validStudentsError } = await supabaseAdmin
+        .from('students')
+        .select('id')
+        .in('id', nextStudentIds)
+        .eq('is_active', true);
+
+      if (validStudentsError || validStudents.length !== nextStudentIds.length) {
+        return res.status(400).json({ error: 'One or more selected students are invalid or inactive.' });
+      }
+
       const { data: conflicts } = await supabaseAdmin
         .from('manual_allocation_rule_students')
         .select('student_id, rule_id')
