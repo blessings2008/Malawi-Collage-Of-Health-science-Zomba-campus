@@ -30,6 +30,31 @@ async function buildVisitHistory(studentIds) {
   return historyMap;
 }
 
+// Builds the active Super Admin manual allocation map.
+// If a student appears in more than one active rule, fail the allocation run
+// instead of choosing a rule arbitrarily.
+async function buildManualAssignments() {
+  const { data: rules, error } = await supabaseAdmin
+    .from('manual_allocation_rules')
+    .select('id, district_id, manual_allocation_rule_students(student_id)')
+    .eq('is_active', true);
+
+  if (error) throw error;
+
+  const assignments = new Map();
+  for (const rule of rules || []) {
+    for (const member of rule.manual_allocation_rule_students || []) {
+      if (assignments.has(member.student_id) && assignments.get(member.student_id) !== rule.district_id) {
+        const err = new Error('A student belongs to multiple active manual allocation rules with different districts.');
+        err.code = 'MANUAL_RULE_CONFLICT';
+        throw err;
+      }
+      assignments.set(member.student_id, rule.district_id);
+    }
+  }
+  return assignments;
+}
+
 // POST /api/allocations/run — STEP 5: Generate Smart Allocation (preview only, not persisted)
 // Body: { yearOfStudy?, cohortIds?: [], allEligible?: bool, attachmentPeriodId, districtIds: [],
 //         rules: { avoidRepetition, balanceGender } }
@@ -105,10 +130,21 @@ router.post('/run', requireRole('admin', 'super_admin'), async (req, res) => {
     visitedDistrictIds: historyMap.get(s.id) || [],
   }));
 
-  // STEP 4 + 5 — apply rules and run the engine
+  // STEP 4 + 5 — apply normal rules plus active Super Admin manual rules.
+  let manualAssignments;
+  try {
+    manualAssignments = await buildManualAssignments();
+  } catch (err) {
+    if (err.code === 'MANUAL_RULE_CONFLICT') {
+      return res.status(409).json({ error: err.message });
+    }
+    return res.status(500).json({ error: 'Could not load manual allocation rules.' });
+  }
+
   const { results, summary } = runAllocation(studentInputs, districtInputs, {
     avoidRepetition: rules.avoidRepetition !== false,
     balanceGender: rules.balanceGender !== false,
+    manualAssignments,
   });
 
   // Enrich results with names for the review table (STEP 6)
@@ -369,6 +405,218 @@ router.post('/:periodId/unlock', requireRole('super_admin'), async (req, res) =>
   });
 
   res.json({ unlocked: true, period });
+});
+
+// GET /api/allocations/manual-rules — Super Admin only
+router.get('/manual-rules', requireRole('super_admin'), async (req, res) => {
+  const { data, error } = await supabaseAdmin
+    .from('manual_allocation_rules')
+    .select('id, district_id, note, is_active, created_by, updated_by, created_at, updated_at, districts(name), manual_allocation_rule_students(student_id, students(student_number, full_name))')
+    .order('created_at', { ascending: false });
+
+  if (error) return res.status(500).json({ error: error.message });
+
+  res.json((data || []).map((rule) => ({
+    ...rule,
+    district_name: rule.districts?.name || 'Unknown district',
+    students: (rule.manual_allocation_rule_students || []).map((m) => ({
+      id: m.student_id,
+      student_number: m.students?.student_number,
+      full_name: m.students?.full_name,
+    })),
+  })));
+});
+
+// POST /api/allocations/manual-rules — create a future same-district rule
+router.post('/manual-rules', requireRole('super_admin'), async (req, res) => {
+  const { studentIds, districtId, note } = req.body;
+
+  if (!Array.isArray(studentIds) || studentIds.length < 2 || !districtId) {
+    return res.status(400).json({ error: 'Select at least two students and a district.' });
+  }
+
+  const uniqueStudentIds = [...new Set(studentIds)];
+  if (uniqueStudentIds.length < 2) {
+    return res.status(400).json({ error: 'Select at least two different students.' });
+  }
+
+  const { data: district, error: districtError } = await supabaseAdmin
+    .from('districts')
+    .select('id, name, is_active')
+    .eq('id', districtId)
+    .single();
+  if (districtError || !district?.is_active) {
+    return res.status(400).json({ error: 'Selected district is not active.' });
+  }
+
+  const { data: students, error: studentError } = await supabaseAdmin
+    .from('students')
+    .select('id')
+    .in('id', uniqueStudentIds)
+    .eq('is_active', true);
+  if (studentError || students?.length !== uniqueStudentIds.length) {
+    return res.status(400).json({ error: 'One or more selected students are invalid or inactive.' });
+  }
+
+  const { data: conflicts } = await supabaseAdmin
+    .from('manual_allocation_rule_students')
+    .select('student_id, manual_allocation_rules!inner(id, district_id, is_active)')
+    .in('student_id', uniqueStudentIds)
+    .eq('manual_allocation_rules.is_active', true);
+
+  if (conflicts?.length) {
+    return res.status(409).json({
+      error: 'One or more selected students already belong to an active manual allocation rule.',
+      studentIds: conflicts.map((x) => x.student_id),
+    });
+  }
+
+  const { data: rule, error: ruleError } = await supabaseAdmin
+    .from('manual_allocation_rules')
+    .insert({
+      district_id: districtId,
+      note: note?.trim() || null,
+      created_by: req.user.id,
+      updated_by: req.user.id,
+    })
+    .select()
+    .single();
+
+  if (ruleError) return res.status(400).json({ error: ruleError.message });
+
+  const { error: membersError } = await supabaseAdmin
+    .from('manual_allocation_rule_students')
+    .insert(uniqueStudentIds.map((studentId) => ({ rule_id: rule.id, student_id: studentId })));
+
+  if (membersError) {
+    await supabaseAdmin.from('manual_allocation_rules').delete().eq('id', rule.id);
+    return res.status(400).json({ error: membersError.message });
+  }
+
+  await logAction({
+    user: req.user,
+    action: `created manual same-district rule for ${uniqueStudentIds.length} student(s) → ${district.name}`,
+    entityType: 'manual_allocation_rule',
+    entityId: rule.id,
+    changes: { studentIds: uniqueStudentIds, districtId, districtName: district.name, note: note?.trim() || null },
+  });
+
+  res.status(201).json({ ...rule, district_name: district.name, students: uniqueStudentIds });
+});
+
+// PUT /api/allocations/manual-rules/:id — change district, students, note, or status
+router.put('/manual-rules/:id', requireRole('super_admin'), async (req, res) => {
+  const { studentIds, districtId, note, isActive } = req.body;
+
+  const { data: existing, error: existingError } = await supabaseAdmin
+    .from('manual_allocation_rules')
+    .select('id, district_id, is_active')
+    .eq('id', req.params.id)
+    .single();
+
+  if (existingError) return res.status(404).json({ error: 'Manual allocation rule not found.' });
+
+  const nextStudentIds = Array.isArray(studentIds) ? [...new Set(studentIds)] : null;
+  if (nextStudentIds && nextStudentIds.length < 2) {
+    return res.status(400).json({ error: 'A rule must contain at least two students.' });
+  }
+
+  const nextDistrictId = districtId || existing.district_id;
+  const nextActive = typeof isActive === 'boolean' ? isActive : existing.is_active;
+
+  if (nextActive) {
+    const { data: district } = await supabaseAdmin
+      .from('districts')
+      .select('id, name, is_active')
+      .eq('id', nextDistrictId)
+      .single();
+    if (!district?.is_active) return res.status(400).json({ error: 'Selected district is not active.' });
+
+    if (nextStudentIds) {
+      const { data: conflicts } = await supabaseAdmin
+        .from('manual_allocation_rule_students')
+        .select('student_id, rule_id')
+        .in('student_id', nextStudentIds)
+        .neq('rule_id', req.params.id);
+      if (conflicts?.length) {
+        const activeRuleIds = conflicts.map((x) => x.rule_id);
+        const { data: activeRules } = await supabaseAdmin
+          .from('manual_allocation_rules')
+          .select('id')
+          .in('id', activeRuleIds)
+          .eq('is_active', true);
+        if (activeRules?.length) {
+          return res.status(409).json({
+            error: 'One or more selected students already belong to another active manual allocation rule.',
+            studentIds: conflicts.filter((x) => activeRules.some((r) => r.id === x.rule_id)).map((x) => x.student_id),
+          });
+        }
+      }
+    }
+  }
+
+  const updates = { updated_by: req.user.id, district_id: nextDistrictId, is_active: nextActive };
+  if (typeof note === 'string') updates.note = note.trim() || null;
+
+  const { data: updated, error: updateError } = await supabaseAdmin
+    .from('manual_allocation_rules')
+    .update(updates)
+    .eq('id', req.params.id)
+    .select('*, districts(name)')
+    .single();
+
+  if (updateError) return res.status(400).json({ error: updateError.message });
+
+  if (nextStudentIds) {
+    const { error: deleteError } = await supabaseAdmin
+      .from('manual_allocation_rule_students')
+      .delete()
+      .eq('rule_id', req.params.id);
+    if (deleteError) return res.status(400).json({ error: deleteError.message });
+
+    const { error: insertError } = await supabaseAdmin
+      .from('manual_allocation_rule_students')
+      .insert(nextStudentIds.map((studentId) => ({ rule_id: req.params.id, student_id: studentId })));
+    if (insertError) return res.status(400).json({ error: insertError.message });
+  }
+
+  await logAction({
+    user: req.user,
+    action: `updated manual same-district rule ${req.params.id}`,
+    entityType: 'manual_allocation_rule',
+    entityId: req.params.id,
+    changes: { studentIds: nextStudentIds, districtId: nextDistrictId, isActive: nextActive, note: updates.note },
+  });
+
+  res.json({ ...updated, district_name: updated.districts?.name || 'Unknown district' });
+});
+
+// DELETE /api/allocations/manual-rules/:id — remove rule
+router.delete('/manual-rules/:id', requireRole('super_admin'), async (req, res) => {
+  const { data: existing } = await supabaseAdmin
+    .from('manual_allocation_rules')
+    .select('id, district_id')
+    .eq('id', req.params.id)
+    .single();
+
+  if (!existing) return res.status(404).json({ error: 'Manual allocation rule not found.' });
+
+  const { error } = await supabaseAdmin
+    .from('manual_allocation_rules')
+    .delete()
+    .eq('id', req.params.id);
+
+  if (error) return res.status(400).json({ error: error.message });
+
+  await logAction({
+    user: req.user,
+    action: `deleted manual same-district rule ${req.params.id}`,
+    entityType: 'manual_allocation_rule',
+    entityId: req.params.id,
+    changes: { districtId: existing.district_id },
+  });
+
+  res.json({ deleted: true });
 });
 
 // POST /api/allocations/manual — directly assign or reassign a single student
