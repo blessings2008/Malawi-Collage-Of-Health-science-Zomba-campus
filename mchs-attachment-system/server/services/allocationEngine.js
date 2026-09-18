@@ -70,10 +70,11 @@
  * @param {Object} [options]
  * @param {boolean} [options.avoidRepetition=true]
  * @param {boolean} [options.balanceGender=true]
+ * @param {Map<string,string>} [options.manualAssignments] - studentId -> forced districtId
  * @returns {{ results: AllocationResult[], summary: object }}
  */
 function runAllocation(students, districts, options = {}) {
-  const { avoidRepetition = true, balanceGender = true } = options;
+  const { avoidRepetition = true, balanceGender = true, manualAssignments = new Map() } = options;
 
   // Working copies so we can mutate capacity/gender counters as we assign.
   const districtState = new Map(
@@ -99,6 +100,36 @@ function runAllocation(students, districts, options = {}) {
 
   for (const student of orderedStudents) {
     const visited = new Set(student.visitedDistrictIds || []);
+    const forcedDistrictId = manualAssignments.get(student.id);
+
+    // Super Admin manual rules intentionally override normal ranking.
+    // Capacity is still enforced; if the forced district has no room the
+    // student is left unallocated instead of silently exceeding capacity.
+    if (forcedDistrictId) {
+      const forced = districtState.get(forcedDistrictId);
+      if (!forced || forced.remaining <= 0) {
+        results.push({
+          studentId: student.id,
+          districtId: null,
+          rotationStatus: null,
+          rotationReason: forced
+            ? `Manual allocation rule could not be applied: ${forced.name} has no remaining capacity.`
+            : 'Manual allocation rule references an unavailable district.',
+        });
+        continue;
+      }
+
+      forced.remaining -= 1;
+      forced.genderCounts[student.gender] = (forced.genderCounts[student.gender] || 0) + 1;
+      results.push({
+        studentId: student.id,
+        districtId: forced.id,
+        rotationStatus: visited.has(forced.id) ? 'Repeat Allocation' : 'New District',
+        rotationReason: 'Super Admin manual same-district rule.',
+      });
+      continue;
+    }
+
     const candidates = [...districtState.values()].filter((d) => d.remaining > 0);
 
     if (candidates.length === 0) {
