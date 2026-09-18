@@ -89,12 +89,36 @@ router.post('/run', requireRole('admin', 'super_admin'), async (req, res) => {
     return res.status(400).json({ error: 'No eligible students matched the selection.' });
   }
 
-  // STEP 3 — selected districts with capacity
+  // Active manual rules are private Super Admin controls. Their target
+  // districts are included automatically so a rule remains effective even
+  // when the normal allocation screen did not select that district.
+  let manualAssignments;
+  try {
+    manualAssignments = await buildManualAssignments();
+  } catch (err) {
+    if (err.code === 'MANUAL_RULE_CONFLICT') {
+      return res.status(409).json({ error: err.message });
+    }
+    return res.status(500).json({ error: 'Could not load manual allocation rules.' });
+  }
+
+  const manualDistrictIds = [...new Set(
+    students.map((s) => manualAssignments.get(s.id)).filter(Boolean)
+  )];
+  const allocationDistrictIds = [...new Set([...(districtIds || []), ...manualDistrictIds])];
+
+  // STEP 3 — selected districts plus districts required by active manual rules
   const { data: districts, error: districtsError } = await supabaseAdmin
     .from('districts')
     .select('*')
-    .in('id', districtIds)
+    .in('id', allocationDistrictIds)
     .eq('is_active', true);
+
+  if (manualDistrictIds.length && districts.length < allocationDistrictIds.length) {
+    return res.status(409).json({
+      error: 'One or more manual allocation rules target an inactive or unavailable district.',
+    });
+  }
   if (districtsError) return res.status(500).json({ error: districtsError.message });
 
   // Account for anything already allocated in this district for this period
@@ -103,7 +127,7 @@ router.post('/run', requireRole('admin', 'super_admin'), async (req, res) => {
     .select('district_id')
     .eq('attachment_period_id', attachmentPeriodId)
     .eq('status', 'Allocated')
-    .in('district_id', districtIds);
+    .in('district_id', allocationDistrictIds);
 
   const alreadyAllocatedByDistrict = (existingAllocs || []).reduce((acc, a) => {
     acc[a.district_id] = (acc[a.district_id] || 0) + 1;
@@ -131,16 +155,6 @@ router.post('/run', requireRole('admin', 'super_admin'), async (req, res) => {
   }));
 
   // STEP 4 + 5 — apply normal rules plus active Super Admin manual rules.
-  let manualAssignments;
-  try {
-    manualAssignments = await buildManualAssignments();
-  } catch (err) {
-    if (err.code === 'MANUAL_RULE_CONFLICT') {
-      return res.status(409).json({ error: err.message });
-    }
-    return res.status(500).json({ error: 'Could not load manual allocation rules.' });
-  }
-
   const { results, summary } = runAllocation(studentInputs, districtInputs, {
     avoidRepetition: rules.avoidRepetition !== false,
     balanceGender: rules.balanceGender !== false,
