@@ -16,7 +16,11 @@ const YEAR_SEMESTER_VALUES = [
   'Year 3 - Semester 1',
   'Year 3 - Semester 2',
 ];
-const PROGRAM_VALUES = ['Nursing and Midwifery', 'Certificate in Midwifery Technicians'];
+const PROGRAM_VALUES = [
+  'Certificate in Midwifery assistant',
+  'Certificate in pharmacy',
+  'Diploma in Community Healthy Nursing',
+];
 
 router.use(requireAuth);
 
@@ -238,7 +242,7 @@ router.get('/import/template', requireRole('admin', 'super_admin'), async (req, 
     fullName: 'Example Student',
     gender: 'Female',
     yearOfStudy: 'Year 1 - Semester 1',
-    program: 'Nursing and Midwifery',
+    program: 'Certificate in Midwifery assistant',
     cohortName: '2024 Intake',
     phone: '0999000000',
     email: 'example@mchs.ac.mw',
