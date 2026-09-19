@@ -17,6 +17,8 @@ const YEAR_SEMESTER_VALUES = [
   'Year 3 - Semester 2',
 ];
 const PROGRAM_VALUES = [
+  'Nursing and Midwifery',
+  'Certificate in Midwifery Technicians',
   'Certificate in Midwifery assistant',
   'Certificate in pharmacy',
   'Diploma in Community Healthy Nursing',
