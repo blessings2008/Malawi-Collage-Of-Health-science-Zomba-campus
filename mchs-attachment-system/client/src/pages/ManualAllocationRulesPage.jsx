@@ -110,7 +110,7 @@ export default function ManualAllocationRulesPage() {
 
   const toggleRule = async (rule) => {
     try {
-      await api.put('/api/allocations/manual-rules/' + rule.id, { isActive: !rule.is_active });
+      await api.put('/api/allocations/manual-rules/' + rule.id, { isActive: !rule.active });
       await load();
     } catch (err) {
       setError(err.message);
@@ -222,16 +222,16 @@ export default function ManualAllocationRulesPage() {
 
           <div className="space-y-3">
             {rules.map((rule) => (
-              <div key={rule.id} className={'border rounded-xl p-4 ' + (rule.is_active ? 'border-teal-200' : 'border-surface-border opacity-70')}>
+              <div key={rule.id} className={'border rounded-xl p-4 ' + (rule.active ? 'border-teal-200' : 'border-surface-border opacity-70')}>
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="font-semibold text-navy-800">{rule.district_name}</p>
                     <p className="text-xs text-navy-400 mt-0.5">
-                      {rule.students.length} students · {rule.is_active ? 'Active' : 'Inactive'}
+                      {rule.students.length} students · {rule.active ? 'Active' : 'Inactive'}
                     </p>
                   </div>
-                  <span className={'text-[11px] font-bold px-2 py-1 rounded-full ' + (rule.is_active ? 'bg-teal-50 text-teal-700' : 'bg-surface-muted text-navy-400')}>
-                    {rule.is_active ? 'ACTIVE' : 'OFF'}
+                  <span className={'text-[11px] font-bold px-2 py-1 rounded-full ' + (rule.active ? 'bg-teal-50 text-teal-700' : 'bg-surface-muted text-navy-400')}>
+                    {rule.active ? 'ACTIVE' : 'OFF'}
                   </span>
                 </div>
 
@@ -248,7 +248,7 @@ export default function ManualAllocationRulesPage() {
                 <div className="flex gap-2 mt-4 pt-3 border-t border-surface-border">
                   <button className="btn-secondary text-xs" onClick={() => editRule(rule)}>Edit</button>
                   <button className="btn-secondary text-xs" onClick={() => toggleRule(rule)}>
-                    {rule.is_active ? 'Deactivate' : 'Activate'}
+                    {rule.active ? 'Deactivate' : 'Activate'}
                   </button>
                   <button className="text-xs font-semibold text-rose-600 px-3" onClick={() => deleteRule(rule)}>Delete</button>
                 </div>
