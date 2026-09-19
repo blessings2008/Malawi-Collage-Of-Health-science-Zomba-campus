@@ -37,7 +37,7 @@ async function buildManualAssignments() {
   const { data: rules, error } = await supabaseAdmin
     .from('manual_allocation_rules')
     .select('id, district_id, manual_allocation_rule_students(student_id)')
-    .eq('is_active', true);
+    .eq('active', true);
 
   if (error) throw error;
 
@@ -77,7 +77,7 @@ router.post('/run', requireRole('admin', 'super_admin'), async (req, res) => {
   }
 
   // STEP 1 — select eligible students
-  let studentQuery = supabaseAdmin.from('students').select('*').eq('is_active', true);
+  let studentQuery = supabaseAdmin.from('students').select('*').eq('active', true);
   if (!allEligible) {
     if (yearOfStudy) studentQuery = studentQuery.eq('year_of_study', yearOfStudy);
     if (cohortIds?.length) studentQuery = studentQuery.in('cohort_id', cohortIds);
@@ -256,7 +256,7 @@ router.post('/commit', requireRole('admin', 'super_admin'), async (req, res) => 
 router.get('/manual-rules', requireRole('super_admin'), async (req, res) => {
   const { data, error } = await supabaseAdmin
     .from('manual_allocation_rules')
-    .select('id, district_id, note, is_active, created_by, updated_by, created_at, updated_at, districts(name), manual_allocation_rule_students(student_id, students(student_number, full_name))')
+    .select('id, district_id, note, active, created_by, created_at, updated_at, districts(name), manual_allocation_rule_students(student_id, students(student_number, full_name))')
     .order('created_at', { ascending: false });
 
   if (error) return res.status(500).json({ error: error.message });
@@ -305,9 +305,9 @@ router.post('/manual-rules', requireRole('super_admin'), async (req, res) => {
 
   const { data: conflicts } = await supabaseAdmin
     .from('manual_allocation_rule_students')
-    .select('student_id, manual_allocation_rules!inner(id, district_id, is_active)')
+    .select('student_id, manual_allocation_rules!inner(id, district_id, active)')
     .in('student_id', uniqueStudentIds)
-    .eq('manual_allocation_rules.is_active', true);
+    .eq('manual_allocation_rules.active', true);
 
   if (conflicts?.length) {
     return res.status(409).json({
@@ -322,7 +322,6 @@ router.post('/manual-rules', requireRole('super_admin'), async (req, res) => {
       district_id: districtId,
       note: note?.trim() || null,
       created_by: req.user.id,
-      updated_by: req.user.id,
     })
     .select()
     .single();
@@ -355,7 +354,7 @@ router.put('/manual-rules/:id', requireRole('super_admin'), async (req, res) => 
 
   const { data: existing, error: existingError } = await supabaseAdmin
     .from('manual_allocation_rules')
-    .select('id, district_id, is_active')
+    .select('id, district_id, active')
     .eq('id', req.params.id)
     .single();
 
@@ -367,7 +366,7 @@ router.put('/manual-rules/:id', requireRole('super_admin'), async (req, res) => 
   }
 
   const nextDistrictId = districtId || existing.district_id;
-  const nextActive = typeof isActive === 'boolean' ? isActive : existing.is_active;
+  const nextActive = typeof isActive === 'boolean' ? isActive : existing.active;
 
   if (nextActive) {
     const { data: district } = await supabaseAdmin
@@ -410,7 +409,7 @@ router.put('/manual-rules/:id', requireRole('super_admin'), async (req, res) => 
     }
   }
 
-  const updates = { updated_by: req.user.id, district_id: nextDistrictId, is_active: nextActive };
+  const updates = { district_id: nextDistrictId, active: nextActive };
   if (typeof note === 'string') updates.note = note.trim() || null;
 
   const { data: updated, error: updateError } = await supabaseAdmin
@@ -440,7 +439,7 @@ router.put('/manual-rules/:id', requireRole('super_admin'), async (req, res) => 
     action: `updated manual same-district rule ${req.params.id}`,
     entityType: 'manual_allocation_rule',
     entityId: req.params.id,
-    changes: { studentIds: nextStudentIds, districtId: nextDistrictId, isActive: nextActive, note: updates.note },
+    changes: { studentIds: nextStudentIds, districtId: nextDistrictId, active: nextActive, note: updates.note },
   });
 
   res.json({ ...updated, district_name: updated.districts?.name || 'Unknown district' });
