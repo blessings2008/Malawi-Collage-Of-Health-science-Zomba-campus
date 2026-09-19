@@ -8,6 +8,8 @@ export const YEARS = [
 ];
 
 export const PROGRAMS = [
+  'Nursing and Midwifery',
+  'Certificate in Midwifery Technicians',
   'Certificate in Midwifery assistant',
   'Certificate in pharmacy',
   'Diploma in Community Healthy Nursing',
