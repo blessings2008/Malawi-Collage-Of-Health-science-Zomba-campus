@@ -77,7 +77,7 @@ router.post('/run', requireRole('admin', 'super_admin'), async (req, res) => {
   }
 
   // STEP 1 — select eligible students
-  let studentQuery = supabaseAdmin.from('students').select('*').eq('active', true);
+  let studentQuery = supabaseAdmin.from('students').select('*').eq('is_active', true);
   if (!allEligible) {
     if (yearOfStudy) studentQuery = studentQuery.eq('year_of_study', yearOfStudy);
     if (cohortIds?.length) studentQuery = studentQuery.in('cohort_id', cohortIds);
@@ -398,7 +398,7 @@ router.put('/manual-rules/:id', requireRole('super_admin'), async (req, res) => 
           .from('manual_allocation_rules')
           .select('id')
           .in('id', activeRuleIds)
-          .eq('is_active', true);
+          .eq('active', true);
         if (activeRules?.length) {
           return res.status(409).json({
             error: 'One or more selected students already belong to another active manual allocation rule.',
