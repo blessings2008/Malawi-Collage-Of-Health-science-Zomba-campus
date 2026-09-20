@@ -33,9 +33,15 @@ router.post('/', requireRole('super_admin'), async (req, res) => {
     return res.status(400).json({ error: 'Invalid role.' });
   }
 
+  const normalizedEmail = String(email).trim().toLowerCase();
+  const normalizedName = String(fullName).trim();
+  if (!normalizedEmail || !normalizedName || String(password).length < 8) {
+    return res.status(400).json({ error: 'Email and full name are required, and password must be at least 8 characters.' });
+  }
+
   const { data: authUser, error: authError } = await supabaseAdmin.auth.admin.createUser({
-    email,
-    password,
+    email: normalizedEmail,
+    password:
     email_confirm: true,
   });
 
@@ -43,15 +49,19 @@ router.post('/', requireRole('super_admin'), async (req, res) => {
 
   const { data: profile, error: profileError } = await supabaseAdmin
     .from('profiles')
-    .insert({ id: authUser.user.id, full_name: fullName, email, role })
+    .insert({ id: authUser.user.id, full_name: fullName.trim(), email: email.trim().toLowerCase(), role })
     .select()
     .single();
 
-  if (profileError) return res.status(400).json({ error: profileError.message });
+  if (profileError) {
+    // Avoid leaving an orphaned Supabase Auth account when profile creation fails.
+    await supabaseAdmin.auth.admin.deleteUser(authUser.user.id);
+    return res.status(400).json({ error: profileError.message });
+  }
 
   await logAction({
     user: req.user,
-    action: `created ${role} account for ${fullName} (${email})`,
+    action: `created ${role} account for ${normalizedName} (${normalizedEmail})`,
     entityType: 'user',
     entityId: profile.id,
   });
