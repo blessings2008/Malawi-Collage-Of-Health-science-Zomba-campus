@@ -1,4 +1,5 @@
 const express = require('express');
+const crypto = require('crypto');
 const { supabaseAdmin } = require('../lib/supabase');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { logAction } = require('../services/auditService');
@@ -6,6 +7,45 @@ const { notify } = require('../services/notificationService');
 const { runAllocation } = require('../services/allocationEngine');
 
 const router = express.Router();
+
+const ALLOCATION_COMMIT_TTL_MS = 10 * 60 * 1000;
+
+function allocationCommitSecret() {
+  return process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY;
+}
+
+function normalizeCommitResults(results) {
+  return [...results]
+    .map((r) => ({
+      studentId: r.studentId,
+      newDistrictId: r.newDistrictId || null,
+      rotationStatus: r.rotationStatus || null,
+      rotationReason: r.rotationReason || null,
+    }))
+    .sort((a, b) => String(a.studentId).localeCompare(String(b.studentId)));
+}
+
+function signAllocationCommit(attachmentPeriodId, results, expiresAt) {
+  const secret = allocationCommitSecret();
+  if (!secret) return null;
+  const payload = JSON.stringify({
+    attachmentPeriodId,
+    expiresAt,
+    results: normalizeCommitResults(results),
+  });
+  return crypto.createHmac('sha256', secret).update(payload).digest('hex');
+}
+
+function verifyAllocationCommit(attachmentPeriodId, results, expiresAt, token) {
+  if (!token || !expiresAt || Date.now() > Number(expiresAt)) return false;
+  const expected = signAllocationCommit(attachmentPeriodId, results, expiresAt);
+  if (!expected) return false;
+  try {
+    return crypto.timingSafeEqual(Buffer.from(expected, 'hex'), Buffer.from(token, 'hex'));
+  } catch {
+    return false;
+  }
+}
 router.use(requireAuth);
 
 /**
@@ -189,11 +229,17 @@ router.post('/run', requireRole('admin', 'super_admin'), async (req, res) => {
     };
   });
 
+  const commitExpiresAt = Date.now() + ALLOCATION_COMMIT_TTL_MS;
+  const commitToken = signAllocationCommit(attachmentPeriodId, enrichedResults, commitExpiresAt);
+  if (!commitToken) return res.status(500).json({ error: 'Server allocation signing is not configured.' });
+
   res.json({
     attachmentPeriodId,
     preview: true,
     results: enrichedResults,
     summary,
+    commitExpiresAt,
+    commitToken,
   });
 });
 
@@ -244,13 +290,17 @@ async function validateAllocationCommit(attachmentPeriodId, results) {
 // POST /api/allocations/commit — persist a previewed allocation (still not finalized/locked)
 // Body: { attachmentPeriodId, results: [ same shape as /run response.results ] }
 router.post('/commit', requireRole('admin', 'super_admin'), async (req, res) => {
-  const { attachmentPeriodId, results } = req.body;
+  const { attachmentPeriodId, results, commitExpiresAt, commitToken } = req.body;
   if (!attachmentPeriodId || !results?.length) {
     return res.status(400).json({ error: 'attachmentPeriodId and results are required.' });
   }
 
   if (!Array.isArray(results) || results.length > 10000) {
     return res.status(400).json({ error: 'Invalid allocation result set.' });
+  }
+
+  if (!verifyAllocationCommit(attachmentPeriodId, results, commitExpiresAt, commitToken)) {
+    return res.status(409).json({ error: 'Allocation preview is invalid or expired. Generate a fresh allocation preview.' });
   }
 
   try {
