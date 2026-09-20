@@ -20,13 +20,19 @@ const usersRoutes = require('./routes/users');
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-// contentSecurityPolicy disabled: the app is now served from this same
-// Express process (client + API combined), and a default CSP would block
-// the Vite build's inline styles/scripts and the Google Fonts stylesheet.
-app.use(helmet({ contentSecurityPolicy: false }));
+app.use(helmet());
+
+const allowedOrigins = (process.env.CLIENT_ORIGIN || '')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
 app.use(
   cors({
-    origin: process.env.CLIENT_ORIGIN || true,
+    origin(origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+      return callback(new Error('Origin is not allowed by CORS.'));
+    },
     credentials: true,
   })
 );
