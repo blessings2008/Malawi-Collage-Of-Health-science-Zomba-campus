@@ -41,7 +41,7 @@ router.post('/', requireRole('super_admin'), async (req, res) => {
 
   const { data: authUser, error: authError } = await supabaseAdmin.auth.admin.createUser({
     email: normalizedEmail,
-    password:
+    password,
     email_confirm: true,
   });
 
