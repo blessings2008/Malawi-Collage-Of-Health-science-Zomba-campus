@@ -27,15 +27,17 @@ const allowedOrigins = (process.env.CLIENT_ORIGIN || '')
   .map((origin) => origin.trim())
   .filter(Boolean);
 
-app.use(
-  cors({
-    origin(origin, callback) {
-      if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
-      return callback(new Error('Origin is not allowed by CORS.'));
-    },
-    credentials: true,
-  })
-);
+if (allowedOrigins.length > 0) {
+  app.use(
+    cors({
+      origin(origin, callback) {
+        if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+        return callback(new Error('Origin is not allowed by CORS.'));
+      },
+      credentials: true,
+    })
+  );
+}
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 app.use(express.json({ limit: '10mb' }));
 
