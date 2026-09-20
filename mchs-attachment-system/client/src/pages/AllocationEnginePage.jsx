@@ -103,6 +103,8 @@ export default function AllocationEnginePage() {
       await api.post('/api/allocations/commit', {
         attachmentPeriodId: runResult.attachmentPeriodId,
         results: runResult.results,
+        commitExpiresAt: runResult.commitExpiresAt,
+        commitToken: runResult.commitToken,
       });
       setCommitted(true);
     } catch (err) {
