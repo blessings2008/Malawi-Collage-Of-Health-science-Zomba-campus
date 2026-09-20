@@ -1,9 +1,10 @@
 const express = require('express');
 const { supabaseAdmin } = require('../lib/supabase');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireRole } = require('../middleware/auth');
 
 const router = express.Router();
 router.use(requireAuth);
+router.use(requireRole('admin', 'super_admin'));
 
 // GET /api/notifications
 router.get('/', async (req, res) => {
