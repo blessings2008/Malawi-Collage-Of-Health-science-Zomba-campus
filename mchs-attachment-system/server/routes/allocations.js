@@ -197,6 +197,50 @@ router.post('/run', requireRole('admin', 'super_admin'), async (req, res) => {
   });
 });
 
+/**
+ * Validate a proposed allocation before persistence. The browser is never
+ * trusted to decide which students/districts may be written.
+ */
+async function validateAllocationCommit(attachmentPeriodId, results) {
+  const studentIds = [...new Set(results.map((r) => r.studentId).filter(Boolean))];
+  const districtIds = [...new Set(results.map((r) => r.newDistrictId).filter(Boolean))];
+
+  if (studentIds.length !== results.length) throw new Error('Each allocation result must contain a unique studentId.');
+
+  const { data: period, error: periodError } = await supabaseAdmin
+    .from('attachment_periods').select('id, is_locked').eq('id', attachmentPeriodId).single();
+  if (periodError || !period) throw new Error('Attachment period not found.');
+  if (period.is_locked) throw new Error('This attachment period is finalized and locked.');
+
+  const { data: students, error: studentsError } = await supabaseAdmin
+    .from('students').select('id').in('id', studentIds).eq('is_active', true);
+  if (studentsError || (students || []).length !== studentIds.length) throw new Error('One or more students are invalid or inactive.');
+
+  if (districtIds.length) {
+    const { data: districts, error: districtsError } = await supabaseAdmin
+      .from('districts').select('id, capacity').in('id', districtIds).eq('is_active', true);
+    if (districtsError || (districts || []).length !== districtIds.length) throw new Error('One or more target districts are invalid or inactive.');
+
+    const proposedCounts = new Map();
+    for (const r of results) {
+      if (r.newDistrictId) proposedCounts.set(r.newDistrictId, (proposedCounts.get(r.newDistrictId) || 0) + 1);
+    }
+
+    const { data: existing } = await supabaseAdmin
+      .from('allocations').select('student_id, district_id').eq('attachment_period_id', attachmentPeriodId).eq('status', 'Allocated');
+    const existingByDistrict = new Map();
+    for (const row of existing || []) {
+      if (!studentIds.includes(row.student_id) && row.district_id) existingByDistrict.set(row.district_id, (existingByDistrict.get(row.district_id) || 0) + 1);
+    }
+    for (const district of districts || []) {
+      const total = (existingByDistrict.get(district.id) || 0) + (proposedCounts.get(district.id) || 0);
+      if (total > district.capacity) throw new Error(`Allocation exceeds capacity for district ${district.id}.`);
+    }
+  }
+
+  return true;
+}
+
 // POST /api/allocations/commit — persist a previewed allocation (still not finalized/locked)
 // Body: { attachmentPeriodId, results: [ same shape as /run response.results ] }
 router.post('/commit', requireRole('admin', 'super_admin'), async (req, res) => {
@@ -205,13 +249,23 @@ router.post('/commit', requireRole('admin', 'super_admin'), async (req, res) => 
     return res.status(400).json({ error: 'attachmentPeriodId and results are required.' });
   }
 
+  if (!Array.isArray(results) || results.length > 10000) {
+    return res.status(400).json({ error: 'Invalid allocation result set.' });
+  }
+
+  try {
+    await validateAllocationCommit(attachmentPeriodId, results);
+  } catch (err) {
+    return res.status(409).json({ error: err.message });
+  }
+
   const rows = results.map((r) => ({
     student_id: r.studentId,
     attachment_period_id: attachmentPeriodId,
-    district_id: r.newDistrictId,
+    district_id: r.newDistrictId || null,
     status: r.newDistrictId ? 'Allocated' : 'Unallocated',
-    rotation_status: r.rotationStatus,
-    rotation_reason: r.rotationReason,
+    rotation_status: r.rotationStatus || null,
+    rotation_reason: r.rotationReason || null,
   }));
 
   const { data, error } = await supabaseAdmin
@@ -492,7 +546,7 @@ router.put('/:id/adjust', requireRole('admin', 'super_admin'), async (req, res) 
 
   const { data: existing, error: fetchError } = await supabaseAdmin
     .from('allocations')
-    .select('*, students(student_number, full_name), districts(name), attachment_periods(is_locked, name)')
+    .select('*, students(student_number, full_name), districts(name), attachment_periods(id, is_locked, name)')
     .eq('id', req.params.id)
     .single();
 
@@ -520,9 +574,22 @@ router.put('/:id/adjust', requireRole('admin', 'super_admin'), async (req, res) 
 
   const { data: newDistrict } = await supabaseAdmin
     .from('districts')
-    .select('name')
+    .select('name, capacity, is_active')
     .eq('id', newDistrictId)
     .single();
+  if (!newDistrict || !newDistrict.is_active) {
+    return res.status(400).json({ error: 'Target district is not active.' });
+  }
+
+  const { count: targetCount } = await supabaseAdmin
+    .from('allocations')
+    .select('*', { count: 'exact', head: true })
+    .eq('attachment_period_id', existing.attachment_periods?.id || '')
+    .eq('district_id', newDistrictId)
+    .eq('status', 'Allocated');
+  if (existing.district_id !== newDistrictId && (targetCount || 0) >= newDistrict.capacity && !confirmed) {
+    return res.status(409).json({ requiresConfirmation: true, warning: `${newDistrict.name} is already at capacity (${targetCount}/${newDistrict.capacity}). Assign anyway?` });
+  }
 
   const { data: updated, error } = await supabaseAdmin
     .from('allocations')
@@ -676,11 +743,12 @@ router.post('/manual', requireRole('super_admin'), async (req, res) => {
 
   const { data: district, error: districtError } = await supabaseAdmin
     .from('districts')
-    .select('name, capacity')
+    .select('name, capacity, is_active')
     .eq('id', districtId)
     .single();
 
-  if (districtError) return res.status(404).json({ error: 'District not found.' });
+  if (districtError || !district) return res.status(404).json({ error: 'District not found.' });
+  if (!district.is_active) return res.status(400).json({ error: 'Target district is not active.' });
 
   // Warn if the student previously visited this district (same pattern as /adjust)
   const { data: pastVisits } = await supabaseAdmin
