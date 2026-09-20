@@ -73,6 +73,44 @@ router.post('/', requireRole('super_admin'), async (req, res) => {
 router.put('/:id', requireRole('super_admin'), async (req, res) => {
   const { role, isActive, fullName } = req.body;
 
+  if (role !== undefined && !['super_admin', 'admin', 'lecturer'].includes(role)) {
+    return res.status(400).json({ error: 'Invalid role.' });
+  }
+  if (isActive !== undefined && typeof isActive !== 'boolean') {
+    return res.status(400).json({ error: 'isActive must be a boolean.' });
+  }
+
+  const { data: existing, error: existingError } = await supabaseAdmin
+    .from('profiles')
+    .select('id, full_name, email, role, is_active')
+    .eq('id', req.params.id)
+    .single();
+
+  if (existingError) return res.status(404).json({ error: 'User not found.' });
+
+  if (existing.id === req.user.id && (isActive === false || role === 'admin' || role === 'lecturer')) {
+    return res.status(400).json({ error: 'You cannot deactivate or demote your own account.' });
+  }
+
+  const nextRole = role ?? existing.role;
+  const nextActive = isActive ?? existing.is_active;
+
+  if (existing.role === 'super_admin' && (nextRole !== 'super_admin' || !nextActive)) {
+    const { count, error: countError } = await supabaseAdmin
+      .from('profiles')
+      .select('id', { count: 'exact', head: true })
+      .eq('role', 'super_admin')
+      .eq('is_active', true);
+
+    if (countError) return res.status(500).json({ error: 'Could not verify active Super Admin count.' });
+    if ((count || 0) <= 1) {
+      return res.status(400).json({ error: 'At least one active Super Admin must remain.' });
+    }
+  }
+
+  const normalizedName = fullName === undefined ? existing.full_name : String(fullName).trim();
+  if (!normalizedName) return res.status(400).json({ error: 'Full name cannot be empty.' });
+
   const { data, error } = await supabaseAdmin
     .from('profiles')
     .update({
@@ -91,6 +129,10 @@ router.put('/:id', requireRole('super_admin'), async (req, res) => {
     action: `updated user account for ${data.full_name}`,
     entityType: 'user',
     entityId: data.id,
+    changes: {
+      before: { role: existing.role, is_active: existing.is_active, full_name: existing.full_name },
+      after: { role: data.role, is_active: data.is_active, full_name: data.full_name },
+    },
   });
 
   res.json(data);
