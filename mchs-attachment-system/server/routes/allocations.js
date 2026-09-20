@@ -587,8 +587,13 @@ router.put('/:id/adjust', requireRole('admin', 'super_admin'), async (req, res) 
     .eq('attachment_period_id', existing.attachment_periods?.id || '')
     .eq('district_id', newDistrictId)
     .eq('status', 'Allocated');
-  if (existing.district_id !== newDistrictId && (targetCount || 0) >= newDistrict.capacity && !confirmed) {
+  if (existing.district_id !== newDistrictId && (targetCount || 0) >= newDistrict.capacity) {
+    if (!confirmed) {
     return res.status(409).json({ requiresConfirmation: true, warning: `${newDistrict.name} is already at capacity (${targetCount}/${newDistrict.capacity}). Assign anyway?` });
+    }
+    if (req.user.role !== 'super_admin') {
+      return res.status(403).json({ error: 'Only a Super Admin can override district capacity.' });
+    }
   }
 
   const { data: updated, error } = await supabaseAdmin
@@ -614,7 +619,7 @@ router.put('/:id/adjust', requireRole('admin', 'super_admin'), async (req, res) 
     action: actionText,
     entityType: 'allocation',
     entityId: updated.id,
-    changes: { from: existing.district_id, to: newDistrictId },
+    changes: { from: existing.district_id, to: newDistrictId, capacityOverride: (targetCount || 0) >= newDistrict.capacity && existing.district_id !== newDistrictId },
   });
 
   await notify({
@@ -783,11 +788,14 @@ router.post('/manual', requireRole('super_admin'), async (req, res) => {
     .maybeSingle();
 
   const wasAlreadyInThisDistrict = existingAllocation?.district_id === districtId;
-  if (!wasAlreadyInThisDistrict && (currentCount || 0) >= district.capacity && !confirmed) {
+  if (!wasAlreadyInThisDistrict && (currentCount || 0) >= district.capacity) {
+    if (!confirmed) {
     return res.status(409).json({
       requiresConfirmation: true,
       warning: `${district.name} is already at capacity (${currentCount}/${district.capacity}). Assign anyway?`,
-    });
+      });
+    }
+    // This route is Super Admin-only, so confirmed is an explicit privileged override.
   }
 
   const { data: updated, error } = await supabaseAdmin
@@ -816,7 +824,7 @@ router.post('/manual', requireRole('super_admin'), async (req, res) => {
     action: actionText,
     entityType: 'allocation',
     entityId: updated.id,
-    changes: { district_id: districtId },
+    changes: { district_id: districtId, capacityOverride: !wasAlreadyInThisDistrict && (currentCount || 0) >= district.capacity },
   });
 
   await notify({
