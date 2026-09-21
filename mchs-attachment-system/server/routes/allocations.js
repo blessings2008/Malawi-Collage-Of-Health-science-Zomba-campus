@@ -685,12 +685,29 @@ router.put('/:id/adjust', requireRole('admin', 'super_admin'), async (req, res) 
 
 // POST /api/allocations/:periodId/finalize — lock the period (admin+)
 router.post('/:periodId/finalize', requireRole('admin', 'super_admin'), async (req, res) => {
+  const { data: periodBeforeFinalize, error: periodBeforeFinalizeError } = await supabaseAdmin
+    .from('attachment_periods')
+    .select('id, name, is_locked')
+    .eq('id', req.params.periodId)
+    .single();
+
+  if (periodBeforeFinalizeError || !periodBeforeFinalize) {
+    return res.status(404).json({ error: 'Attachment period not found.' });
+  }
+  if (periodBeforeFinalize.is_locked) {
+    return res.status(423).json({ error: 'This attachment period is already finalized and locked.' });
+  }
+
   const { data: allocations, error } = await supabaseAdmin
     .from('allocations')
-    .select('id, status, district_id')
+    .select('id, student_id, status, district_id')
     .eq('attachment_period_id', req.params.periodId);
 
   if (error) return res.status(500).json({ error: error.message });
+
+  if (!allocations.length) {
+    return res.status(422).json({ error: 'Cannot finalize: no allocations have been generated for this period.' });
+  }
 
   const unallocated = allocations.filter((a) => a.status === 'Unallocated');
   if (unallocated.length > 0) {
@@ -750,9 +767,14 @@ router.post('/:periodId/unlock', requireRole('super_admin'), async (req, res) =>
 
   if (error) return res.status(400).json({ error: error.message });
 
-  await supabaseAdmin
+  const { error: allocationUnlockError } = await supabaseAdmin
     .from('allocations')
-    .update({ status: 'Allocated' })
+    .update({
+      status: 'Allocated',
+      finalized: false,
+      finalized_at: null,
+      finalized_by: null,
+    })
     .eq('attachment_period_id', req.params.periodId)
     .eq('status', 'Locked');
 
