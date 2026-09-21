@@ -106,7 +106,7 @@ router.post('/', requireRole('admin', 'super_admin'), async (req, res) => {
 router.put('/:id', requireRole('admin', 'super_admin'), async (req, res) => {
   const { data: existing, error: fetchErr } = await supabaseAdmin
     .from('attachment_periods')
-    .select('is_locked, name')
+    .select('is_locked, name, start_date, end_date')
     .eq('id', req.params.id)
     .single();
 
