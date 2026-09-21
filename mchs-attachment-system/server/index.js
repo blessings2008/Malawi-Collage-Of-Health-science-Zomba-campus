@@ -20,7 +20,21 @@ const usersRoutes = require('./routes/users');
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-app.use(helmet());
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        // Supabase Auth uses HTTPS for REST/Auth requests and WebSockets
+        // for realtime/session-related connections.
+        'connect-src': [
+          "'self'",
+          'https://yjsitmykjjhajrssrywa.supabase.co',
+          'wss://yjsitmykjjhajrssrywa.supabase.co',
+        ],
+      },
+    },
+  })
+);
 
 const allowedOrigins = (process.env.CLIENT_ORIGIN || '')
   .split(',')
