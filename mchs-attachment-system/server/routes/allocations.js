@@ -760,7 +760,12 @@ router.post('/:periodId/finalize', requireRole('admin', 'super_admin'), async (r
 router.post('/:periodId/unlock', requireRole('super_admin'), async (req, res) => {
   const { data: period, error } = await supabaseAdmin
     .from('attachment_periods')
-    .update({ is_locked: false })
+    .update({
+      is_locked: false,
+      locked_at: null,
+      locked_by: null,
+      status: 'Upcoming',
+    })
     .eq('id', req.params.periodId)
     .select()
     .single();
@@ -777,6 +782,10 @@ router.post('/:periodId/unlock', requireRole('super_admin'), async (req, res) =>
     })
     .eq('attachment_period_id', req.params.periodId)
     .eq('status', 'Locked');
+
+  if (allocationUnlockError) {
+    return res.status(400).json({ error: allocationUnlockError.message });
+  }
 
   await logAction({
     user: req.user,
