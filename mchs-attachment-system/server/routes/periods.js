@@ -53,6 +53,30 @@ router.post('/', requireRole('admin', 'super_admin'), async (req, res) => {
     return res.status(400).json({ error: 'name, startDate, endDate, and academicYear are required.' });
   }
 
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  const allowedStatuses = ['Upcoming', 'Current', 'Completed'];
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || startDate > endDate) {
+    return res.status(400).json({ error: 'startDate and endDate must be valid, and endDate cannot be before startDate.' });
+  }
+  if (status !== undefined && !allowedStatuses.includes(status)) {
+    return res.status(400).json({ error: 'Invalid period status.' });
+  }
+
+  const { data: overlappingPeriods, error: overlapError } = await supabaseAdmin
+    .from('attachment_periods')
+    .select('id, name')
+    .lte('start_date', endDate)
+    .gte('end_date', startDate);
+  if (overlapError) return res.status(500).json({ error: overlapError.message });
+  if (overlappingPeriods?.length) {
+    return res.status(409).json({
+      error: 'This attachment period overlaps an existing period.',
+      periods: overlappingPeriods.map((p) => ({ id: p.id, name: p.name })),
+    });
+  }
+
+
   const { data, error } = await supabaseAdmin
     .from('attachment_periods')
     .insert({
@@ -92,6 +116,30 @@ router.put('/:id', requireRole('admin', 'super_admin'), async (req, res) => {
   }
 
   const { name, startDate, endDate, academicYear, status } = req.body;
+
+  const nextStartDate = startDate ?? existing.start_date;
+  const nextEndDate = endDate ?? existing.end_date;
+  const allowedStatuses = ['Upcoming', 'Current', 'Completed'];
+  if (nextStartDate > nextEndDate) {
+    return res.status(400).json({ error: 'endDate cannot be before startDate.' });
+  }
+  if (status !== undefined && !allowedStatuses.includes(status)) {
+    return res.status(400).json({ error: 'Invalid period status.' });
+  }
+
+  const { data: overlappingPeriods, error: overlapError } = await supabaseAdmin
+    .from('attachment_periods')
+    .select('id, name')
+    .neq('id', req.params.id)
+    .lte('start_date', nextEndDate)
+    .gte('end_date', nextStartDate);
+  if (overlapError) return res.status(500).json({ error: overlapError.message });
+  if (overlappingPeriods?.length) {
+    return res.status(409).json({
+      error: 'This attachment period overlaps an existing period.',
+      periods: overlappingPeriods.map((p) => ({ id: p.id, name: p.name })),
+    });
+  }
 
   const { data, error } = await supabaseAdmin
     .from('attachment_periods')
