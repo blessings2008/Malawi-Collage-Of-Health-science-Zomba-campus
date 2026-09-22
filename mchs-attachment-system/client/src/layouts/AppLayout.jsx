@@ -11,7 +11,7 @@ const NAV_ITEMS = [
   { to: '/periods', label: 'Attachment Periods', icon: '◷', roles: ['super_admin', 'admin', 'lecturer'] },
   { to: '/allocation-engine', label: 'Allocation Engine', icon: '⚙', roles: ['super_admin', 'admin'] },
   { to: '/reports', label: 'Reports', icon: '▦', roles: ['super_admin', 'admin', 'lecturer'] },
-  { to: '/audit-log', label: 'Audit Log', icon: '≡', roles: ['super_admin', 'admin'] },
+  { to: '/audit-log', label: 'Audit Log', icon: '≡', roles: ['super_admin'] },
   { to: '/users', label: 'User Management', icon: '◎', roles: ['super_admin'] },
   { to: '/manual-allocation-rules', label: 'Manual Allocation Rules', icon: '⚑', roles: ['super_admin'] },
 ];
