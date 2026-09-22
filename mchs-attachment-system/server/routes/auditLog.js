@@ -6,7 +6,7 @@ const router = express.Router();
 router.use(requireAuth);
 
 // GET /api/audit-log — super_admin + admin only
-router.get('/', requireRole('admin', 'super_admin'), async (req, res) => {
+router.get('/', requireRole('super_admin'), async (req, res) => {
   const { entityType, limit = 100 } = req.query;
 
   let query = supabaseAdmin
