@@ -62,7 +62,7 @@ export default function App() {
       <Route
         path="/audit-log"
         element={
-          <ProtectedRoute roles={['admin', 'super_admin']}>
+          <ProtectedRoute roles={['super_admin']}>
             <AuditLogPage />
           </ProtectedRoute>
         }
