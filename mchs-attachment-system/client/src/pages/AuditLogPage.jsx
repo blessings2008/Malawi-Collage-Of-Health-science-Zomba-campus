@@ -12,12 +12,30 @@ export default function AuditLogPage() {
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(true);
   const [entityType, setEntityType] = useState('');
+  const [clearing, setClearing] = useState(false);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     setLoading(true);
     const params = entityType ? `?entityType=${entityType}` : '';
-    api.get(`/api/audit-log${params}`).then(setEntries).finally(() => setLoading(false));
+    setError('');
+    api.get(`/api/audit-log${params}`).then(setEntries).catch((err) => setError(err.message || 'Failed to load audit log.')).finally(() => setLoading(false));
   }, [entityType]);
+
+  const clearLog = async () => {
+    if (!entries.length) return;
+    if (!window.confirm('Clear the audit log? This permanently removes the recorded audit entries.')) return;
+    setClearing(true);
+    setError('');
+    try {
+      await api.delete('/api/audit-log');
+      setEntries([]);
+    } catch (err) {
+      setError(err.message || 'Failed to clear audit log.');
+    } finally {
+      setClearing(false);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -26,7 +44,8 @@ export default function AuditLogPage() {
           <h1 className="text-2xl font-bold text-navy-900">Audit Log</h1>
           <p className="text-navy-400 mt-1">Full accountability trail of administrative actions.</p>
         </div>
-        <select className="input !w-auto" value={entityType} onChange={(e) => setEntityType(e.target.value)}>
+        <div className="flex items-center gap-2 flex-wrap">
+          <select className="input !w-auto" value={entityType} onChange={(e) => setEntityType(e.target.value)}>
           <option value="">All Activity</option>
           <option value="student">Students</option>
           <option value="cohort">Cohorts</option>
@@ -34,8 +53,14 @@ export default function AuditLogPage() {
           <option value="period">Attachment Periods</option>
           <option value="allocation">Allocations</option>
           <option value="user">User Accounts</option>
-        </select>
+          </select>
+          <button type="button" className="btn-secondary !px-4 !py-2" onClick={clearLog} disabled={clearing || !entries.length}>
+            {clearing ? 'Clearing...' : 'Clear Log'}
+          </button>
+        </div>
       </div>
+
+      {error && <div className="p-3 rounded-lg bg-red-50 text-red-700 text-sm">{error}</div>}
 
       <div className="card">
         {loading ? (
